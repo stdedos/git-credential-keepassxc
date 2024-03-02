@@ -3,43 +3,29 @@ name: Build and Test
 on:
   pull_request:
   push:
-    branches:
-      - "master"
-    tags-ignore:
-      - "*"
 
 env:
   CARGO_TERM_COLOR: always
 
-jobs:
-  cancel_previous:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Cancel Previous Runs
-        uses: styfle/cancel-workflow-action@0.12.1
-        with:
-          access_token: ${{ github.token }}
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
+jobs:
   lint:
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os:
+          - ubuntu-20.04
+          - ubuntu-latest
         rust_toolchain: [stable]
         features: [default, all]
         experimental: [false]
         include:
           - os: ubuntu-latest
-            rust_toolchain: nightly
-            features: all
-            experimental: true
-          - os: macos-latest
-            rust_toolchain: nightly
-            features: all
-            experimental: true
-          - os: windows-latest
             rust_toolchain: nightly
             features: all
             experimental: true
@@ -79,7 +65,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os:
+          - ubuntu-20.04
+          - ubuntu-latest
         rust_toolchain: [stable]
         features:
           - [default]
@@ -116,7 +104,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os:
+          - ubuntu-20.04
+          - ubuntu-latest
         rust_toolchain: [stable]
         features: [default, notification, yubikey, all]
         experimental: [false]
@@ -125,32 +115,20 @@ jobs:
             rust_toolchain: nightly
             features: all
             experimental: true
-          - os: macos-latest
-            rust_toolchain: nightly
-            features: all
-            experimental: true
-          - os: windows-latest
-            rust_toolchain: nightly
-            features: all
-            experimental: true
     steps:
       - uses: actions/checkout@v4
-      - name: Install macOS Dependencies
-        if: contains(matrix.os, 'macos')
-        run: |
-          brew install coreutils gnu-tar
-          echo PATH="/usr/local/opt/gnu-tar/libexec/gnubin:$PATH" >> $GITHUB_ENV
+        with:
+          fetch-depth: 0
+
+      - name: Get git version
+        id: git-version
+        run: echo "GIT_VERSION=$(git describe --tags --always --debug)" | tee -a $GITHUB_ENV
 
       - name: Install Rust Toolchain
         id: rust_toolchain
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust_toolchain }}
-      - name: Add macOS Targets
-        if: contains(matrix.os, 'macos')
-        run: |
-          rustup target add x86_64-apple-darwin
-          rustup target add aarch64-apple-darwin
 
       - name: Cache
         uses: actions/cache@v4
@@ -167,26 +145,9 @@ jobs:
             build-${{ runner.os }}-
 
       - name: "Build (Linux/Windows)"
-        if: "!contains(matrix.os, 'macos')"
         shell: bash
         run: |
           cargo build --release --features=${{ matrix.features }}
-      - name: "Build (macOS x86_64)"
-        if: contains(matrix.os, 'macos')
-        shell: bash
-        run: |
-          cargo build --release --features=${{ matrix.features }} --target=x86_64-apple-darwin
-      - name: "Build (macOS aarch64)"
-        if: contains(matrix.os, 'macos')
-        shell: bash
-        run: |
-          cargo build --release --features=${{ matrix.features }} --target=aarch64-apple-darwin
-      - name: macOS Universal Binary
-        if: contains(matrix.os, 'macos')
-        run: |
-          mkdir -p target/release/
-          lipo -create -output target/release/git-credential-keepassxc target/x86_64-apple-darwin/release/git-credential-keepassxc target/aarch64-apple-darwin/release/git-credential-keepassxc
-          file target/release/git-credential-keepassxc
 
       - name: Determine artifact name suffix
         id: artifact_suffix
@@ -195,21 +156,24 @@ jobs:
         run: |
           case "${{ matrix.features }}" in
             default)
-              printf 'suffix=%s\n' 'minimal' >> $GITHUB_OUTPUT
+              printf 'suffix=%s\n' 'minimal' | tee -a $GITHUB_OUTPUT
               ;;
             all)
-              printf 'suffix=%s\n' 'full' >> $GITHUB_OUTPUT
+              printf 'suffix=%s\n' 'full' | tee -a $GITHUB_OUTPUT
               ;;
             *)
               exit 1
               ;;
           esac
+
+      - name: Rename artifacts
+        run: |
+          mv target/release/git-credential-keepassxc git-credential-keepassxc_${{ env.GIT_VERSION }}
+
       - name: Artifacts
         if: "matrix.features == 'default' || matrix.features == 'all'"
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os }}-${{ matrix.rust_toolchain }}-${{ steps.artifact_suffix.outputs.suffix }}
-          retention-days: 60
+          name: git-credential-keepassxc_${{ env.GIT_VERSION }}_${{ matrix.os }}_${{ matrix.rust_toolchain }}_${{ steps.artifact_suffix.outputs.suffix }}
           path: |
-            target/release/git-credential-keepassxc
-            target/release/git-credential-keepassxc.exe
+            git-credential-keepassxc_${{ env.GIT_VERSION }}
